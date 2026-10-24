@@ -13,14 +13,15 @@ function Test-PythonRuntime {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
     if ($Path -match '(?i)\\WindowsApps\\') { return $null }
 
-    $probeArgs = @($PrefixArgs) + @('-c', 'import sys; print("%s.%s" % (sys.version_info[0], sys.version_info[1]))')
-    $probeOutput = & $Path @probeArgs 2>$null
+    $probeArgs = @($PrefixArgs) + @('--version')
+    $probeOutput = & $Path @probeArgs 2>&1
     $probeExitCode = $LASTEXITCODE
     if ($probeExitCode -ne 0) { return $null }
 
-    $versionText = [string]($probeOutput | Select-Object -First 1)
+    $versionText = [string](@($probeOutput) -join ' ')
+    if ($versionText -notmatch '(?i)\bPython\s+(?<version>\d+\.\d+(?:\.\d+)?)\b') { return $null }
     [version]$version = [version]'0.0'
-    if (-not [version]::TryParse($versionText, [ref]$version)) { return $null }
+    if (-not [version]::TryParse($Matches.version, [ref]$version)) { return $null }
     if ($version -lt [version]'3.10') { return $null }
 
     return [pscustomobject]@{
