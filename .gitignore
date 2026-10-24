@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+*.pose
+*.pose.tmp
+/UE4SS*/
+/ue4ss/
+*.zip
