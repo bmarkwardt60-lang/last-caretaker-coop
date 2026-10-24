@@ -51,11 +51,11 @@ function Find-PythonRuntime {
         if ($pythonCommand -and $pythonCommand.Source) { $pythonPaths.Add($pythonCommand.Source) }
     }
 
-    foreach ($basePath in @(
-        (Join-Path $env:LOCALAPPDATA 'Programs\Python'),
-        $env:ProgramFiles,
-        ${env:ProgramFiles(x86)}
-    )) {
+    $pythonBasePaths = [System.Collections.Generic.List[string]]::new()
+    if ($env:LOCALAPPDATA) { $pythonBasePaths.Add((Join-Path $env:LOCALAPPDATA 'Programs\Python')) }
+    if ($env:ProgramFiles) { $pythonBasePaths.Add($env:ProgramFiles) }
+    if (${env:ProgramFiles(x86)}) { $pythonBasePaths.Add(${env:ProgramFiles(x86)}) }
+    foreach ($basePath in $pythonBasePaths) {
         if (-not $basePath) { continue }
         foreach ($pythonFile in @(Get-ChildItem -Path (Join-Path $basePath 'Python3*\python.exe') -File -ErrorAction SilentlyContinue)) {
             $pythonPaths.Add($pythonFile.FullName)
@@ -81,13 +81,15 @@ function Get-SteamExecutable {
             foreach ($propertyName in @('SteamPath', 'InstallPath')) {
                 $property = $steamInfo.PSObject.Properties[$propertyName]
                 if ($property -and $property.Value) {
-                    $candidates.Add((Join-Path ([string]$property.Value) 'steam.exe'))
+                    $steamRoot = ([string]$property.Value).Replace('/', '\')
+                    $candidates.Add((Join-Path $steamRoot 'steam.exe'))
                 }
             }
         }
     }
     if (${env:ProgramFiles(x86)}) { $candidates.Add((Join-Path ${env:ProgramFiles(x86)} 'Steam\steam.exe')) }
     if ($env:ProgramFiles) { $candidates.Add((Join-Path $env:ProgramFiles 'Steam\steam.exe')) }
+    if ($env:LOCALAPPDATA) { $candidates.Add((Join-Path $env:LOCALAPPDATA 'Steam\steam.exe')) }
 
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
@@ -112,9 +114,14 @@ function Select-HostAddress {
         $addresses = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
             Where-Object {
                 $_.AddressState -eq 'Preferred' -and
-                $_.IPAddress -notmatch '^(127\.|169\.254\.)'
+                $_.IPAddress -notmatch '^(0\.|127\.|169\.254\.|22[4-9]\.|23[0-9]\.)'
             } |
-            Sort-Object -Property InterfaceIndex, IPAddress -Unique)
+            Select-Object IPAddress, InterfaceAlias, InterfaceIndex -Unique |
+            Sort-Object -Property @{
+                Expression = {
+                    if ($_.IPAddress -match '^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)') { 0 } else { 1 }
+                }
+            }, InterfaceIndex, IPAddress)
     }
     catch {
         $addresses = @()
@@ -123,7 +130,7 @@ function Select-HostAddress {
     if ($addresses.Count -eq 1) { return [string]$addresses[0].IPAddress }
     if ($addresses.Count -gt 1) {
         Write-Host ''
-        Write-Host 'Choose the address on the network your friend will use:' -ForegroundColor Cyan
+        Write-Host 'Choose the LAN or private-VPN address your friend can reach (private addresses are listed first):' -ForegroundColor Cyan
         for ($index = 0; $index -lt $addresses.Count; $index++) {
             Write-Host ('  {0}. {1}  ({2})' -f ($index + 1), $addresses[$index].IPAddress, $addresses[$index].InterfaceAlias)
         }
@@ -191,7 +198,10 @@ function Invoke-CoopWizard {
     $projectRoot = $PSScriptRoot
     $installerPath = Join-Path $projectRoot 'Install-Coop.ps1'
     $bridgePath = Join-Path $projectRoot 'bridge\coop_bridge.py'
-    $stateRoot = Join-Path $env:LOCALAPPDATA 'LastCaretakerCoop'
+    $localAppData = $env:LOCALAPPDATA
+    if (-not $localAppData) { $localAppData = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::LocalApplicationData) }
+    if (-not $localAppData) { throw 'Windows did not provide a local application data folder for logs and session files.' }
+    $stateRoot = Join-Path $localAppData 'LastCaretakerCoop'
     $gameProcessName = 'VoyageSteam-Win64-Shipping'
     $port = 28770
     $session = 'tlc-coop'

@@ -23,6 +23,7 @@ function Resolve-GameWin64Dir {
         $candidate = (Resolve-Path -LiteralPath $RequestedPath).Path
         $possibleDirs = @(
             $candidate,
+            (Join-Path $candidate 'Binaries\Win64'),
             (Join-Path $candidate 'Voyage\Binaries\Win64'),
             (Join-Path $candidate 'Voyage\Voyage\Binaries\Win64')
         )
@@ -35,7 +36,9 @@ function Resolve-GameWin64Dir {
     }
 
     $steamRoots = [System.Collections.Generic.List[string]]::new()
-    $steamRoots.Add('D:\SteamLibrary')
+
+    # Read the Steam installation path from the registry, then include common
+    # install locations as a fallback for portable or first-run installations.
 
     foreach ($registryKey in @(
         'HKCU:\Software\Valve\Steam',
@@ -44,12 +47,17 @@ function Resolve-GameWin64Dir {
     )) {
         $steamInfo = Get-ItemProperty -LiteralPath $registryKey -ErrorAction SilentlyContinue
         if ($steamInfo) {
-            $steamPathProperty = $steamInfo.PSObject.Properties['SteamPath']
-            if ($steamPathProperty -and $steamPathProperty.Value) {
-                $steamRoots.Add([string]$steamPathProperty.Value)
+            foreach ($propertyName in @('SteamPath', 'InstallPath')) {
+                $steamPathProperty = $steamInfo.PSObject.Properties[$propertyName]
+                if ($steamPathProperty -and $steamPathProperty.Value) {
+                    $steamRoots.Add(([string]$steamPathProperty.Value).Replace('/', '\'))
+                }
             }
         }
     }
+    if (${env:ProgramFiles(x86)}) { $steamRoots.Add((Join-Path ${env:ProgramFiles(x86)} 'Steam')) }
+    if ($env:ProgramFiles) { $steamRoots.Add((Join-Path $env:ProgramFiles 'Steam')) }
+    if ($env:LOCALAPPDATA) { $steamRoots.Add((Join-Path $env:LOCALAPPDATA 'Steam')) }
 
     # Steam's VDF lists additional library locations. Read those so the script
     # also works when the game is installed outside the default Steam folder.
@@ -67,14 +75,37 @@ function Resolve-GameWin64Dir {
     $seen = @{}
     foreach ($steamRoot in $steamRoots) {
         if (-not $steamRoot) { continue }
-        $root = $steamRoot.TrimEnd('\')
-        if ($seen.ContainsKey($root)) { continue }
-        $seen[$root] = $true
+        $root = [System.IO.Path]::GetFullPath($steamRoot)
+        $rootKey = $root.TrimEnd('\').ToLowerInvariant()
+        if ($seen.ContainsKey($rootKey)) { continue }
+        $seen[$rootKey] = $true
 
-        $candidate = Join-Path $root 'steamapps\common\Voyage\Voyage\Binaries\Win64'
-        if (Test-Path -LiteralPath (Join-Path $candidate $gameExeName) -PathType Leaf) {
-            Write-Host "Found The Last Caretaker in $candidate"
-            return (Resolve-Path -LiteralPath $candidate).Path
+        $installDirs = [System.Collections.Generic.List[string]]::new()
+        $manifestPath = Join-Path $root 'steamapps\appmanifest_1783560.acf'
+        if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+            $manifest = [System.IO.File]::ReadAllText($manifestPath)
+            $installMatch = [regex]::Match($manifest, '(?im)^\s*"installdir"\s+"(?<name>[^"]+)"')
+            if ($installMatch.Success) { $installDirs.Add($installMatch.Groups['name'].Value) }
+        }
+        # The manifest covers normal Steam installs. These names cover manual
+        # installs and Steam setups where that manifest cannot be read.
+        foreach ($fallbackName in @('Voyage', 'The Last Caretaker', 'TheLastCaretaker')) {
+            if ($installDirs -notcontains $fallbackName) { $installDirs.Add($fallbackName) }
+        }
+
+        foreach ($installDir in $installDirs) {
+            $installRoot = Join-Path $root (Join-Path 'steamapps\common' $installDir)
+            $possibleDirs = @(
+                (Join-Path $installRoot 'Voyage\Voyage\Binaries\Win64'),
+                (Join-Path $installRoot 'Voyage\Binaries\Win64'),
+                (Join-Path $installRoot 'Binaries\Win64')
+            )
+            foreach ($candidate in $possibleDirs) {
+                if (Test-Path -LiteralPath (Join-Path $candidate $gameExeName) -PathType Leaf) {
+                    Write-Host "Found The Last Caretaker in $candidate"
+                    return (Resolve-Path -LiteralPath $candidate).Path
+                }
+            }
         }
     }
 
@@ -162,13 +193,30 @@ if (Get-Process -Name 'VoyageSteam-Win64-Shipping' -ErrorAction SilentlyContinue
     throw 'Close The Last Caretaker before installing the mod, then run this script again.'
 }
 
+$localAppData = $env:LOCALAPPDATA
+if (-not $localAppData) { $localAppData = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::LocalApplicationData) }
+if (-not $localAppData) { throw 'Windows did not provide a local application data folder for backups and logs.' }
+
+# Check permissions up front so an installation under a protected Steam folder
+# fails with a useful next step instead of partway through copying the loader.
+$writeProbe = Join-Path $gameWin64 ('.LastCaretakerCoop-write-check-' + [guid]::NewGuid().ToString('N'))
+try {
+    [System.IO.File]::WriteAllText($writeProbe, '')
+}
+catch {
+    throw "Cannot write to '$gameWin64'. If Steam installed the game under Program Files, close the launcher and rerun PowerShell as Administrator. Details: $($_.Exception.Message)"
+}
+finally {
+    Remove-Item -LiteralPath $writeProbe -Force -ErrorAction SilentlyContinue
+}
+
 $ue4ssRoot = Join-Path $gameWin64 'ue4ss'
 $ue4ssDll = Join-Path $gameWin64 $loaderDllRelativePath
 $modsDir = Join-Path $ue4ssRoot 'Mods'
 $modsTxt = Join-Path $modsDir 'mods.txt'
 
 $timestamp = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
-$backupRoot = Join-Path $env:LOCALAPPDATA "LastCaretakerCoop\install-backups\$timestamp"
+$backupRoot = Join-Path $localAppData "LastCaretakerCoop\install-backups\$timestamp"
 $madeBackup = $false
 $stage = $null
 
@@ -177,10 +225,12 @@ if (-not (Test-Path -LiteralPath $ue4ssDll -PathType Leaf) -or $UE4SSZip) {
         $localPackages = @(Get-ChildItem -LiteralPath $projectRoot -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -match '(?i)UE4SS.*(TLC|UE5[ _-]?8)' } |
             Sort-Object LastWriteTime -Descending)
-        $downloadDir = Join-Path $env:USERPROFILE 'Downloads'
+        $userProfile = $env:USERPROFILE
+        if (-not $userProfile) { $userProfile = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile) }
+        $downloadDir = if ($userProfile) { Join-Path $userProfile 'Downloads' } else { $null }
         $downloadedPackages = @()
-        if (Test-Path -LiteralPath $downloadDir -PathType Container) {
-            $downloadedPackages = @(Get-ChildItem -LiteralPath $downloadDir -Filter '*.zip' -File |
+        if ($downloadDir -and (Test-Path -LiteralPath $downloadDir -PathType Container)) {
+            $downloadedPackages = @(Get-ChildItem -LiteralPath $downloadDir -Filter '*.zip' -File -ErrorAction SilentlyContinue |
                 Where-Object { $_.Name -match '(?i)UE4SS.*(TLC|UE5[ _-]?8)' } |
                 Sort-Object LastWriteTime -Descending)
         }
@@ -305,7 +355,7 @@ if ($stage) {
     }
 }
 
-$stateRoot = Join-Path $env:LOCALAPPDATA 'LastCaretakerCoop'
+$stateRoot = Join-Path $localAppData 'LastCaretakerCoop'
 New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $stateRoot 'game-win64.txt'), $gameWin64, [System.Text.UTF8Encoding]::new($false))
 

@@ -2,6 +2,21 @@
 
 An independent two-player LAN prototype for the Steam build of The Last Caretaker.
 
+> **Status: experimental prototype.** This is not yet a finished co-op release: only player poses are relayed, and the remote player puppet and a two-PC session have not been verified on the current game build.
+
+## Supported PCs
+
+| Component | Current support |
+| --- | --- |
+| Operating system | Windows 10/11, 64-bit, Steam version of the game |
+| Mod loader | UE4SS TLC UE5 8 v1.3 package; Windows x64 only |
+| Launcher | Windows PowerShell 5.1 or newer |
+| LAN bridge | Python 3.10 or newer; the launcher can offer a per-user Python 3.12 install through `winget` |
+| Network | Two PCs on the same LAN or a private VPN; direct IPv4 over UDP port `28770` |
+| Other operating systems/devices | Linux, Steam Deck/Proton, macOS, consoles, and non-Steam game copies are unsupported and untested |
+
+The installer discovers Steam through the Windows registry, Steam's library list, and the game's Steam app manifest. If automatic detection fails, it asks for the game folder. This supports different Windows PCs and Steam library drives; it does not make the current Windows UE4SS loader portable to every operating system or architecture.
+
 ## Start a session
 
 Both players need their own game installation and a copy of this project folder. Double-click **Start-Coop.cmd** on both PCs. Before setup, it checks the public GitHub repository for the latest published release tag and downloads that version automatically when needed.
@@ -12,11 +27,11 @@ Both players need their own game installation and a copy of this project folder.
 4. The host sends the copied invite code to the joining player. The joining player pastes it into their launcher.
 5. The launcher starts the LAN bridge and launches the game through Steam. It stops the bridge when the game closes.
 
-If Windows Firewall asks, allow Python on private networks. The host and joining player need to be on the same LAN or an equivalent private VPN. The bridge uses UDP port `28770` and is not intended for the public internet. The invite code contains the session token; share it only with your co-op partner.
+If Windows Firewall asks, allow Python on the network profile used by your trusted LAN or private VPN. The host and joining player need to be on the same LAN or an equivalent private VPN. The bridge uses UDP port `28770` and is not intended for the public internet. The invite code contains the session token; share it only with your co-op partner.
 
 The Git repository excludes UE4SS package binaries. Each PC needs to obtain the manual package separately on first install.
 
-To publish an update, commit the changes, push a semantic version tag such as `v0.1.1`, and publish a GitHub Release for that tag. The launcher updates from the latest published release; a tag that has not been published as a release is not installed. The updater does not need a GitHub login on player PCs.
+To publish an update, set `VERSION` to the exact semantic version tag, commit the changes, push the tag (for example `v0.1.2`), and publish a GitHub Release for that tag. The launcher checks that the archive's `VERSION` matches its release tag, validates required files, and restores replaced files if an update copy fails. If restoration itself fails, it keeps recovery copies in the temporary update folder and prints the path. The launcher updates from the latest published release; a tag that has not been published as a release is not installed. The updater does not need a GitHub login on player PCs. See [release readiness](docs/release-readiness.md) before publishing.
 
 Use a disposable test save on both PCs. The prototype is still being developed: it relays player poses and attempts to create a presentation-only second player, but shared inventory, construction, quests, creatures, and save state are not synchronized. A visible second player and stable play have not yet been confirmed on two clients.
 
@@ -30,7 +45,7 @@ Bridge logs are saved under `%LOCALAPPDATA%\LastCaretakerCoop\`. The host's late
 - Engine version resource: Unreal Engine `5.8.2`
 - Development machine's executable SHA-256: `08228b72d4590f9b00e2171f252d618464c2e04b785237fe728dddbf27d3b734`
 
-The mod loader and local pawn/mesh details have been observed in-game on the development machine. This exact build has not yet been validated as a playable two-PC co-op session.
+The mod loader and local pawn/mesh details have been observed in-game on the development machine. The current code targets this build, but has not yet been validated as a playable two-PC co-op session. Other game builds may require new UE4SS compatibility work.
 
 ## Current prototype
 
@@ -47,6 +62,7 @@ The UE4SS mod writes the local caretaker transform to a small file. `bridge/coop
 - `bridge/coop_bridge.py` — direct-IP two-player LAN pose relay.
 - `docs/plan.md` — architecture and state policy.
 - `docs/development.md` — manual setup and troubleshooting notes.
+- `docs/release-readiness.md` — platform scope and gates before publishing a release.
 
 ## Prior art checked
 
