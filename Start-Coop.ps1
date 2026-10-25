@@ -42,7 +42,23 @@ function Find-PythonRuntime {
 
     foreach ($path in ($launcherPaths | Select-Object -Unique)) {
         $runtime = Test-PythonRuntime -Path $path -PrefixArgs @('-3')
-        if ($runtime) { return $runtime }
+        if ($runtime) {
+            # Start-Process quotes every argument in the command line. The
+            # Python launcher does not reliably consume a quoted "-3" switch
+            # and can forward it to python.exe, which rejects it. Resolve the
+            # selected interpreter here and launch python.exe directly below.
+            $interpreterArgs = @('-3', '-c', 'import sys; print(sys.executable)')
+            $interpreterOutput = & $path @interpreterArgs 2>$null
+            $interpreterExitCode = $LASTEXITCODE
+            if ($interpreterExitCode -eq 0) {
+                $interpreterPath = [string](@($interpreterOutput) | Select-Object -Last 1)
+                $interpreterPath = $interpreterPath.Trim()
+                if ($interpreterPath -and (Test-Path -LiteralPath $interpreterPath -PathType Leaf)) {
+                    $resolvedRuntime = Test-PythonRuntime -Path $interpreterPath
+                    if ($resolvedRuntime) { return $resolvedRuntime }
+                }
+            }
+        }
     }
 
     $pythonPaths = [System.Collections.Generic.List[string]]::new()
@@ -318,6 +334,15 @@ function Invoke-CoopWizard {
         }
 
         $gameProcess = $null
+        $gameProcessSeen = $false
+        $expectedGameExe = $null
+        $gameFolderFile = Join-Path $stateRoot 'game-win64.txt'
+        if (Test-Path -LiteralPath $gameFolderFile -PathType Leaf) {
+            $installedGameFolder = [System.IO.File]::ReadAllText($gameFolderFile).Trim()
+            if ($installedGameFolder) {
+                $expectedGameExe = [System.IO.Path]::GetFullPath((Join-Path $installedGameFolder 'VoyageSteam-Win64-Shipping.exe'))
+            }
+        }
         $launchDeadline = [datetime]::UtcNow.AddMinutes(3)
         while (-not $gameProcess -and [datetime]::UtcNow -lt $launchDeadline) {
             $bridgeProcess.Refresh()
@@ -325,14 +350,38 @@ function Invoke-CoopWizard {
                 Show-RecentBridgeLog -Paths @($stdoutLog, $stderrLog)
                 throw 'The LAN bridge stopped while Steam was starting the game.'
             }
-            $gameProcess = Get-Process -Name $gameProcessName -ErrorAction SilentlyContinue | Select-Object -First 1
+            foreach ($candidate in @(Get-Process -Name $gameProcessName -ErrorAction SilentlyContinue)) {
+                try {
+                    $candidate.Refresh()
+                    if ($candidate.HasExited) { continue }
+
+                    $candidatePath = $null
+                    try { $candidatePath = $candidate.Path } catch { }
+                    if ($expectedGameExe -and $candidatePath -and
+                        -not [string]::Equals([System.IO.Path]::GetFullPath($candidatePath), $expectedGameExe, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        continue
+                    }
+
+                    $gameProcessSeen = $true
+                    if ($candidate.MainWindowHandle -ne [IntPtr]::Zero) {
+                        $gameProcess = $candidate
+                        break
+                    }
+                }
+                catch {
+                    # Startup can briefly leave a process without readable window state.
+                }
+            }
             if (-not $gameProcess) { Start-Sleep -Seconds 2 }
         }
         if (-not $gameProcess) {
+            if ($gameProcessSeen) {
+                throw "Steam started the game process, but the game window did not open within three minutes. Check Steam and the game logs, then run Start-Coop.cmd again. Bridge logs: $stateRoot"
+            }
             throw "Steam did not start the game within three minutes. Start it from Steam, then run Start-Coop.cmd again. Bridge logs: $stateRoot"
         }
 
-        Write-Host 'The game is running. The bridge will close when the game exits.' -ForegroundColor Green
+        Write-Host 'The game window opened. The bridge will close when the game exits.' -ForegroundColor Green
         Write-Host 'Load a disposable save on both PCs. Press F8 for local details and F9 for the latest peer pose.' -ForegroundColor DarkGray
         $gameProcess.WaitForExit()
         Write-Host 'Game closed; stopping the LAN bridge.' -ForegroundColor DarkGray

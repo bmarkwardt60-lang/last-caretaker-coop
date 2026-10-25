@@ -25,7 +25,7 @@ Both players need their own game installation and a copy of this project folder.
 2. It installs or updates the UE4SS mod files. On the first setup, it may ask for the UE4SS TLC UE5 8 v1.3 ZIP or extracted folder. Get the manual package from [Nexus Mods](https://www.nexusmods.com/thelastcaretaker/mods/4?tab=files).
 3. Choose **Host** on one PC and **Join** on the other.
 4. The host sends the copied invite code to the joining player. The joining player pastes it into their launcher.
-5. The launcher starts the LAN bridge and launches the game through Steam. It stops the bridge when the game closes.
+5. The launcher starts the LAN bridge and launches the game through Steam. It waits for the game window to open before reporting success, then stops the bridge when the game closes. If Steam starts the executable but no window appears within three minutes, the launcher reports that startup failure instead of claiming the game is running.
 
 If Windows Firewall asks, allow Python on the network profile used by your trusted LAN or private VPN. The host and joining player need to be on the same LAN or an equivalent private VPN. The bridge uses UDP port `28770` and is not intended for the public internet. The invite code contains the session token; share it only with your co-op partner.
 
